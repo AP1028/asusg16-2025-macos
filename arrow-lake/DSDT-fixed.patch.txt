@@ -1,0 +1,122 @@
+DSDT-fixed.aml - repair of the ASUS DSDT so macOS (ACPICA 20160930) can load it
+=============================================================================
+Source : DSDT.aml (firmware, 430740 bytes, sha256 of DSDT-fixed.aml below)
+Result : DSDT-fixed.aml (430760 bytes, +20)
+sha256 : 1da5017b6a14771989b611bbb0ff3594f7f0aecce44208e11356342a2b3d1c77
+
+All 6 edits below are literal byte substitutions applied to the *pristine*
+firmware DSDT, in the order given.  Byte 9 (checksum) and bytes 4..7 (table
+length) must be recalculated afterwards: set length = new file size, set
+byte 9 = 0, sum every byte, set byte 9 = (-sum) & 0xFF.
+
+
+WHY THE TABLE IS REJECTED BY macOS
+----------------------------------
+macOS embeds ACPICA 20160930, whose AcpiNsParseTable() performs a *two pass*
+namespace load (AcpiNsOneCompleteParse LOAD_PASS1, then LOAD_PASS2).  In pass 1
+psloop.c skips *every* If/Else/While body ("We want to skip If/Else/While
+constructs during Pass1 ... skip body of if/else/while in pass 1"), so any
+Device() that lives inside a top level If does not exist yet, while
+AcpiDsLoad1BeginOp() still requires the target of every top level Scope() to
+exist already.  This DSDT has 6 top level Scope() statements that violate that
+rule, so the whole table load is aborted
+("AE_NOT_FOUND, [DSDT] table load failed", 0 objects).
+
+Modern ACPICA (>= ~2017, e.g. 20260408) replaced the two pass load with a single
+"execute the table as one term list" pass, so module level If bodies run in
+place and everything resolves - only Scope(HS07) then fails, and that failure is
+non fatal ("Skipping parse of AML opcode: Scope").  That is why acpiexec 2026
+shows 2 "load-time failures" while macOS dies outright.
+
+
+THE SIX EDITS
+-------------
+#1  Scope (_SB.PC00.XHCI.RHUB.HS07)  ->  If (Zero) { ... }   (length preserved)
+
+    The device HS07 is only created by "If (PU2C != 7) { Device (HS07) }"
+    inside the XHCI block; PU2C is 7 on this machine, so the target never
+    exists in either pass.  The body (WCAM/ICM/...) is already skipped today in
+    modern ACPICA, so skipping it changes nothing in the namespace.
+    The PkgLength stays 0x08C, the predicate Zero (0x00) is followed by 21
+    filler Zero terms that occupy the space of the old name string; the original
+    116 byte body is left untouched and is never parsed.
+
+    Find    (25B): 104c082f055f53425f50433030584843495248554248533037
+    Replace (25B): a04c0800000000000000000000000000000000000000000000
+                   (a0 4c 08 00  +  21 x 00)
+
+#2..#6  Scope (X)  ->  If (One) { Scope (X) { ... } }        (each +4 bytes)
+
+    These five Scope() statements are *forward references*: their target is
+    created by module level code (a top level If) that pass 1 has not executed
+    yet.  Wrapping them in "If (One)" makes pass 1 skip them (exactly like the
+    firmware's own top level Ifs) and defers them to the module level code
+    execution phase, which runs after the namespace is complete.  "If (One)" is
+    always true, so the Scope still executes with its original target and the
+    resulting namespace is bit for bit identical to the reference.
+
+    #2 Scope (_SB.PC00.HDAS) @0x04c9ed  PkgLength 0x17a -> 0x17e
+       Find    (17B): 104a172f035f53425f5043303048444153
+       Replace (21B): a04e1701104a172f035f53425f5043303048444153
+
+    #3 Scope (_SB.PC00.HDAS) @0x04d541  PkgLength 0x032 -> 0x036
+       Find    (16B): 10322f035f53425f5043303048444153
+       Replace (20B): a046030110322f035f53425f5043303048444153
+
+    #4 Scope (_SB.PC00.SPI0) @0x0569b9  PkgLength 0x02f -> 0x033
+       Find    (16B): 102f2f035f53425f5043303053504930
+       Replace (20B): a0430301102f2f035f53425f5043303053504930
+
+    #5 Scope (_SB.PC00.SPI0) @0x067b43  PkgLength 0x1f7 -> 0x1fb
+       Find    (17B): 10471f2f035f53425f5043303053504930
+       Replace (21B): a04b1f0110471f2f035f53425f5043303053504930
+
+    #6 Scope (_SB.PC00.SPI0) @0x067d3b  PkgLength 0x047 -> 0x04b
+       Find    (17B): 1047042f035f53425f5043303053504930
+       Replace (21B): a04b04011047042f035f53425f5043303053504930
+
+    Every Find pattern above occurs exactly once in the pristine DSDT, so
+    Count=1 / Skip=0 and no Mask is required.
+
+
+HOW TO APPLY IT WITH OPENCORE
+-----------------------------
+Edits #1 is length preserving and can be used as an ordinary
+ACPI -> Patch entry (TableSignature = 44534454 "DSDT").
+
+    Find    : 104C082F055F53425F50433030584843495248554248533037
+    Replace : A04C0800 0000000000000000000000000000000000000000
+    Mask    : (none)      Count : 1     Skip : 0
+
+Edits #2..#6 each grow the table by 4 bytes.  OpenCore refuses such patches:
+OcAcpiPatchTables() drops any entry whose Find size differs from its Replace
+size ("Find and replace mismatch in size", Library/OcMainLib/OpenCoreAcpi.c),
+and AcpiApplyPatch() is an in-place, equal-size replacement
+(Library/OcAcpiLib/OcAcpiLib.c).  Use the finished table instead:
+
+    put DSDT-fixed.aml into EFI/OC/ACPI/ and add it under ACPI -> Add
+    (the file keeps the original DSDT signature/OEM IDs, so it replaces the
+    firmware DSDT).  OpenCore recomputes the table checksum itself.
+
+If you prefer to patch in place, apply all six Find/Replace pairs above with an
+external tool (or a lower level patcher), then fix the header length and the
+checksum as described at the top.  That is exactly what DSDT-fixed.aml is.
+
+
+VERIFICATION (see DSDT-fixed.proof.txt for the raw output)
+----------------------------------------------------------
+acpiexec 20260408 (modern):
+    original: 2 load-time failures, 5955 Objects / 190 Devices / 118 Regions / 978 Methods
+    fixed   : 0 load-time failures, 5955 Objects / 190 Devices / 118 Regions / 978 Methods
+    namespace dump is identical (5966 nodes), only the 3 error lines disappear
+
+acpiexec 20160930 (the ACPICA version macOS uses, built from source):
+    original: ACPI Error: [_SB_.PC00.HDAS] Namespace lookup failure, AE_NOT_FOUND
+              ACPI Exception: AE_NOT_FOUND, [DSDT] table load failed
+              ACPI Error: 1 table load failures, 0 successful
+    fixed   : no namespace lookup failure at any point in pass 1 or pass 2
+              ACPI: Executed 33 blocks of module-level executable AML code
+              ACPI: 1 ACPI AML tables successfully acquired and loaded
+
+Left alone: the conditional blocks that create the USB/HDAS/SPI0 devices, and
+the PU2C/PU3C conditions.  No object, device, region or method count changes.

@@ -1,0 +1,4 @@
+# Keep binary firmware/tables binary so git does not try to diff or mangle them.
+*.efi binary
+*.aml binary
+*.kext binary
