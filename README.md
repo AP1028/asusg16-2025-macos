@@ -210,12 +210,12 @@ is the thing that calls the helper.
 | ✅ | **External display (DP)** | **Working** | 3440×1440 @ 60 Hz, hot-plug |
 | ✅ | **Internal keyboard** | **Working** | PS/2 via VoodooPS2Controller |
 | ✅ | **USB-A** | **Working** | |
-| ✅ | **USB-C** | **Working** | Data; DP-alt-mode output untested |
+| ✅ | **USB-C** | **Working** | Data **and DP alt mode** |
 | 🚧 | **Keyboard function keys** | **Partial** | Consumer-page HID reports work; the vendor page `0xFF31` reports (brightness, touchpad toggle) are discarded by macOS. Workable with `BrightnessKeys.kext` + a Karabiner rule on Ctrl+F1/F2 |
 | 🚧 | **Trackpad** | **WIP** | `VoodooI2C`/`VoodooI2CHID` load and drive the I2C controller, but **all 24 touchpad ACPI devices (`TPD0`/`TPL1`) are never created** — see below |
 | 🔧 | **Bluetooth** | **Needs upstream** | Intel `8087:0037` ("BlazarU") is absent from `IntelBluetoothFirmware`. It is a standard USB device and the framework already drives 12 other Intel chips — **path: add the device ID + a firmware blob from `linux-firmware`** |
 | ❌ | **Wi-Fi** | **Not possible** | Intel `8086:7740` CNVi; appears nowhere in itlwm. No driver exists. Use a USB Ethernet adapter |
-| ❌ | **Audio (internal)** | **Not possible** | Realtek **ALC1308 on SoundWire**, not legacy HDA — macOS `AppleHDA` has no SoundWire transport. AppleALC loads correctly and has no codec to patch. **USB and HDMI/DP (dGPU) audio work natively** |
+| ❌ | **Audio (internal)** | **Not possible** | Realtek **ALC1308 on SoundWire**, not legacy HDA — macOS `AppleHDA` has no SoundWire transport. AppleALC loads correctly and has no codec to patch. **Use USB audio, which works natively.** NVIDIA HDMI/DP audio over the dGPU is not working |
 
 ### Trackpad (WIP)
 
