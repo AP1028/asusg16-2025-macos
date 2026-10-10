@@ -16,10 +16,9 @@ first documented Arrow Lake-H **laptop** to reach a working macOS desktop.
 
 > **⚠️ This is the pre-install EFI. Fill in your own SMBIOS first — see the next section.**
 
-## Before you boot: generate your own SMBIOS
+## Before you boot: fill in a valid SMBIOS
 
-The shipped `config.plist` has **masked placeholders**. Replace them or macOS will not activate
-properly and Apple services will not work:
+The shipped `config.plist` has **masked placeholders**:
 
 ```
 SystemSerialNumber = REPLACE0000
@@ -28,25 +27,47 @@ SystemUUID         = 00000000-0000-0000-0000-000000000000
 ROM                = 00:11:22:33:44:55
 ```
 
-These are not shipped filled in on purpose: **serial + MLB + ROM together are what registers
-iMessage, FaceTime and Find My**, so publishing a working set lets anyone else use that
-identity.
+**A masked or inconsistent SMBIOS will stop the driver installing.** This is not about iMessage —
+the installer's helper identifies *which EFI it may edit* by matching the running machine against
+the config:
 
-Generate your own with [**GenSMBIOS**](https://github.com/corpnewt/GenSMBIOS):
+- `hw.model` must equal the config's `PlatformInfo → Generic → SystemProductName`
+- if OpenCore's `boot-path` variable is absent, it falls back to matching
+  `IOPlatformSerialNumber` against the config's `SystemSerialNumber` — *"the running Mac's serial
+  number IS the config's SystemSerialNumber, OpenCore wrote it into this boot"*
+
+If nothing matches, it refuses to touch any config and stops with:
+
+```
+no OpenCore config for this Mac (<hw.model>) on any connected disk - plug in the disk or USB
+stick OpenCore started from, then try again (the NOTE lines above show what each partition holds)
+```
+
+So a well-formed, self-consistent identity is a **prerequisite for the driver install**, not a
+bonus. A real serial does *not* promise working iMessage/FaceTime — but a placeholder or a
+mismatched one will block the install outright.
+
+Generate yours with [**GenSMBIOS**](https://github.com/corpnewt/GenSMBIOS):
 
 1. Run `python3 GenSMBIOS.command`
-2. Option **2** (Generate SMBIOS), type the model: **`MacBookPro16,2`**, count `1`
+2. Option **2** (Generate SMBIOS), model **`MacBookPro16,2`**, count `1`
 3. It prints a `Serial`, `Board Serial` (MLB) and `SmUUID`
 4. Put them in `config.plist` → `PlatformInfo → Generic`:
    - `SystemSerialNumber` ← Serial
    - `MLB` ← Board Serial
    - `SystemUUID` ← SmUUID
-   - `ROM` ← your NIC's MAC as 6 raw bytes (`<001122334455>`), or leave the placeholder
-   - Leave `SystemProductName = MacBookPro16,2` and `UpdateSMBIOSMode = Custom` as they are
-5. Verify the serial is not already registered with Apple (GenSMBIOS option 4 checks it)
+   - `ROM` ← your NIC's MAC as 6 raw bytes (`<001122334455>`), or keep the placeholder
+5. **Leave `SystemProductName = MacBookPro16,2` and `UpdateSMBIOSMode = Custom` as they are.**
+   Changing the model changes `hw.model`, and then the installer cannot match the config to the Mac
+6. Sanity-check before rebooting — `hw.model` and the config must agree:
 
-`MacBookPro16,2` is a MacBook Pro 13" 2020 (Ice Lake) — the closest SMBIOS tier for an
-XCPM-capable quad-core laptop, and what this machine runs.
+   ```sh
+   sysctl -n hw.model
+   plutil -extract PlatformInfo.Generic.SystemProductName raw -o - /Volumes/EFI/EFI/OC/config.plist
+   ```
+
+`MacBookPro16,2` is a MacBook Pro 13" 2020 (Ice Lake) — the closest XCPM-capable quad-core laptop
+tier, and what this machine runs.
 
 ## What makes Arrow Lake work
 
@@ -111,31 +132,37 @@ with a Darwin-gated `_STA`.
 `CpuTopologyRebuild.kext` is present but **disabled** — its author states it cannot handle the
 mobile P + E + LP-E layout, and it is what panics. No `ctrsmt=` boot argument.
 
-## After macOS is installed: the NVIDIA driver
+## After macOS is installed: run the driver installer — it flips the EFI for you
 
-**The driver does not write to the EFI.** Its installer puts kexts in `/Library/Extensions`,
-bundles in `/Library/GPUBundles`, and rebuilds the auxiliary kernel collection. It never touches
-`config.plist`. But the EFI **does** need different values once the driver is in, so this repo
-ships the pre-install state and you apply the post-install changes yourself:
+**You do not edit `config.plist` by hand.** The NullMoth installer's privileged helper
+(`nullmoth-setup.sh`, shipped in the 1401 Mac app) rewrites the OpenCore config itself once the
+driver is in. This repo ships the **pre-install** state; the installer converts it.
 
-| | this repo (pre-install) | after installing the driver |
+The helper makes these changes, and backs up your config to
+`config.plist.nullmoth-<timestamp>` first:
+
+| Setting | Pre-install (shipped here) | What the installer sets |
 |---|---|---|
-| `Booter → Quirks → ResizeAppleGpuBars` | **`0`** | **`-1`** |
-| `UEFI → Quirks → ResizeGpuBars` | `-1` | `-1` (leave alone) |
-| `Kernel → Block → com.apple.iokit.IONDRVSupport` | **absent** | **add it** |
-| boot-args | `-v debug=0x100 keepsyms=1 -vi2c-force-polling amfi_get_out_of_my_way=0x1 amfi=0x80` | add `nvfb=1 nvaccel=1 -nvkmsnosmooth` |
+| `Booter → Quirks → ResizeAppleGpuBars` | `0` | **`-1`** — macOS sees the full BAR |
+| `UEFI → Quirks → ResizeGpuBars` | `-1` | **`13`** — 8 GB BAR, full memory bandwidth |
+| `Kernel → Block` | *absent* | **adds `com.apple.iokit.IONDRVSupport` (`Strategy: Exclude`)** — otherwise the firmware framebuffer takes display index 0 from NVRMFB |
+| `Misc → Security → SecureBootModel` | *unchanged* | **`Disabled`** unless SIP is fully on — Apple Secure Boot refuses kexts Apple did not sign |
+| `Booter → Quirks → AllowRelocationBlock` | *unchanged* | **`true`**, only where `ProvideCustomSlide` and `AvoidRuntimeDefrag` are already on — the bigger BAR moves memory around and `boot.efi` otherwise stops at `STOP 0x16` |
+| `NVRAM → Delete` | *unchanged* | adds `boot-args` and `csr-active-config`, so OpenCore rewrites them every boot |
+| `Misc → Tools` | *unchanged* | adds the boot-picker entry — the way back if the driver ever stops macOS starting |
 
-- **`ResizeAppleGpuBars`** must be `0` while installing: with the full BAR, macOS re-places the
-  large BAR during PCI setup and the firmware framebuffer goes with it, so the screen freezes
-  right after `PCI configuration end`. The NVIDIA driver needs the **full BAR afterwards** (BAR1
-  is 16 GB here), so switch to `-1`.
-- **`IONDRVSupport` block** makes the driver hold display index 0. It must be **absent** while
-  installing and added after.
-- **Do not let tooling "help" with the BAR quirks.** Anything that sets `ResizeGpuBars` to `13`
-  will cost you the display.
+So the sequence is: **boot this EFI → install macOS → run the driver installer → reboot.** The
+installer does the rest. It prints every change it makes (`CHANGE …`) and keeps a timestamped
+backup, and `nullmoth-setup.sh` is re-runnable — if OpenCore already has every setting it needs
+it reports `OpenCore already has every setting the driver needs` and changes nothing.
 
-Install the driver from [nullmoth/nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver)
-(1.5.0 validated here), then reboot.
+One caveat from the installer's own notes: if SIP is still fully enabled in the running system,
+it defers the SIP/Secure-Boot/boot-args changes and only applies the `UEFI`/`Booter`/`Kernel.Block`
+ones — so run it again after adjusting SIP.
+
+Getting the driver: [nullmoth/nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver)
+releases (1.5.0 validated here). On a machine you install by hand rather than via 1401, the Mac app
+is the thing that calls the helper.
 
 ## Status
 
