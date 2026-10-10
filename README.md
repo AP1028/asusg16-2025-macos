@@ -12,7 +12,7 @@ first documented Arrow Lake-H **laptop** to reach a working macOS desktop.
 | MUX | **must be on dGPU** |
 | macOS | 15 Sequoia (validated on 15.8.1 / 24H32) |
 | SMBIOS | `MacBookPro16,2` |
-| BIOS | Above 4G **on** · ReBAR **off** · CFG Lock **off** · VT-d off (or `DisableIoMapper`) · **MUX = dGPU** |
+| Firmware | see [Firmware settings](#firmware-settings) · **MUX = dGPU** |
 
 > **⚠️ This is the pre-install EFI. Fill in your own SMBIOS first — see the next section.**
 
@@ -68,6 +68,43 @@ Generate yours with [**GenSMBIOS**](https://github.com/corpnewt/GenSMBIOS):
 
 `MacBookPro16,2` is a MacBook Pro 13" 2020 (Ice Lake) — the closest XCPM-capable quad-core laptop
 tier, and what this machine runs.
+
+## Firmware settings
+
+**This laptop's BIOS does not expose "Above 4G Decoding" or "Resizable BAR" at all.** That is
+normal for ASUS laptops — those toggles belong to desktop boards, and the usual
+"Above 4G on / ReBAR off" advice copied from desktop guides does not apply and will send you
+looking for menus that are not there. Both behaviours are simply on:
+
+| | measured on this machine |
+|---|---|
+| 64-bit PCI decoding | **active** — the driver's BAR1 is `0x3f800000000+0x400000000`, a **16 GB** aperture above 4 GB |
+| Resizable BAR | **not a toggle, and not needed** — BAR1 already comes up at its full 16 GB |
+| Firmware | `2094.80.5.0.0`, OpenCore `REL-109-2026-09-30` |
+| SIP | `csr-active-config = 0x0A43` (set by the installer) |
+
+### Secure Boot — must be **off**
+
+Measured: the UEFI `SecureBoot` variable reads `%01`… but no kext in this setup is Apple-signed
+(the NullMoth kexts are ad-hoc signed), so Apple Secure Boot refuses them. Turn **Secure Boot off**
+in the BIOS. The installer also sets `Misc → Security → SecureBootModel = Disabled` for the same
+reason, and that is an OpenCore setting, separate from the firmware toggle — you need the firmware
+one off to boot at all, and the OpenCore one is handled for you.
+
+### Fast Boot — leave it **off**
+
+Fast Boot can skip USB enumeration to shorten POST, which is exactly what you do not want when
+booting OpenCore from a USB stick: the stick can simply not appear in the boot menu. Leave it off
+while installing, and while you still need the USB as a way back in. Once macOS boots from the
+internal disk on its own, it can go back on — but there is no benefit here.
+
+### Also worth knowing
+
+- **CFG Lock / VT-d** — if your unit exposes them, turn CFG Lock off and VT-d off (or keep
+  `DisableIoMapper = true`, which this config sets). Not all ASUS laptop BIOS revisions show them.
+- **Do not let tooling "help" with the BAR quirks.** The installer sets `ResizeGpuBars = 13` and
+  `ResizeAppleGpuBars = -1` after the driver is in. Since this BIOS has no ReBAR toggle to fight
+  with, those settings are the whole story.
 
 ## What makes Arrow Lake work
 
