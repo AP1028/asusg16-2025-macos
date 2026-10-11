@@ -135,29 +135,98 @@ Three things, all required, all already in this config:
 Full technical detail, verification and the byte-level repair:
 [`support-files/arrow-lake/README.md`](support-files/arrow-lake/README.md).
 
+## Config variants: pre-NVIDIA vs post-install
+
+`EFI/OC/` ships **three** configs. Only `config.plist` is read at boot; the other two are
+reference copies you rename into place.
+
+| file | use when | boot-args |
+|---|---|---|
+| `config.plist` | **default** — NullMoth driver installed | `… amfi=0x80 nvfb=1 nvaccel=1` |
+| `config.plist.pre-nvidia` | **before** the NullMoth driver | `… amfi=0x80` |
+| `config.plist.postinstall` | what the installer's boot-args change amounts to | `… amfi=0x80 nvfb=1 nvaccel=1` |
+
+**The two NVIDIA flags are the only difference between these files**, and it is exactly one key:
+`NVRAM → Add → … → boot-args`. `nvfb=1 nvaccel=1` gate the NullMoth driver's kexts
+(`com.nullmoth.NVRM` / `NVRMFB` / `NVAccel` / `NVRMAGDC`). Without them the dGPU does not come up
+at all. Those kexts are **not** in `OC/Kexts` — nothing in this repo loads them; the flags only
+*permit* them once the installer has put them in place.
+
+`config.plist` and `config.plist.postinstall` are **functionally identical**; they differ only in
+debug hygiene (`AppleDebug` and one disabled `Misc.Entries` entry), which `postinstall` drops.
+
+### What is identical in all three
+
+```
+14 enabled ACPI entries   (12 baseline + SSDT-DSHEC + SSDT-TPDHID)
+ 5 enabled VoodooI2C entries, incl. the nested VoodooInput
+ScanPolicy = 0            every bootable volume is listed
+Misc → Tools             empty (see 64c7d6f — the NullMoth entry is a dead end pre-install)
+PciRoot(0x0)/Pci(0x2,0x0) → disable-gpu = True
+```
+
+`disable-gpu` on the Intel iGPU stays in **all three**: the Xe-LPG iGPU has no macOS driver, so
+this is load-bearing and unrelated to the NVIDIA driver being present.
+
+### Runtime flags that had to survive the rebuild
+
+Two settings are easy to lose and both are load-bearing:
+
+- **`amfi_get_out_of_my_way=0x1 amfi=0x80`** — the NullMoth kexts are ad-hoc signed, so without
+  these they are refused.
+- **`-vi2c-force-polling` is deliberately absent.** The stock config carried it. The trackpad now
+  works in interrupt mode, so polling was removed; re-adding it is unnecessary.
+
+> ⚠️ `boot-args` also appears in `NVRAM → Delete`. OpenCore therefore **rewrites boot-args from
+> the config on every boot** — flags typed at the picker do not persist, and the config is the
+> single source of truth.
+
+### Installing the driver
+
+Run the NullMoth installer; its helper (`nullmoth-setup.sh`) rewrites `config.plist` itself, adds
+`Misc → Tools → NullMothSafe.efi`, and copies the tool. You do not hand-edit the plist. If you
+prefer to do it manually, apply exactly the one-key delta:
+
+```sh
+# pre-NVIDIA -> post-install: append the two flags
+/usr/libexec/PlistBuddy -c "Set :NVRAM:Add:7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args \
+  '-v debug=0x100 keepsyms=1 amfi_get_out_of_my_way=0x1 amfi=0x80 nvfb=1 nvaccel=1'" \
+  EFI/OC/config.plist
+```
+
 ## After macOS is installed: run the driver installer — it flips the EFI for you
 
 **You do not edit `config.plist` by hand.** The NullMoth installer's privileged helper
 (`nullmoth-setup.sh`, shipped in the 1401 Mac app) rewrites the OpenCore config itself once the
 driver is in. This repo ships the **pre-install** state; the installer converts it.
 
-The helper makes these changes, and backs up your config to
-`config.plist.nullmoth-<timestamp>` first:
+The helper backs your config up to `config.plist.nullmoth-<timestamp>` first, then edits it.
 
-| Setting | Pre-install (shipped here) | What the installer sets |
+> **Correction.** An earlier version of this README presented a table of `Booter`/`UEFI` GPU
+> quirks as "what the installer sets". **That table does not describe the machine this repo was
+> taken from.** The verified-working config here runs the NullMoth driver at full Metal 3 with
+> `ResizeAppleGpuBars = 0`, `ResizeGpuBars = -1`, no `AllowRelocationBlock` change and no
+> `Kernel → Block` entry — i.e. *none* of those quirks. Treat the table as installer documentation
+> for a different driver version, **not** as post-install state.
+
+What is **measured** in the shipped config, and therefore what the driver actually runs with here:
+
+| Setting | Value in this repo | note |
 |---|---|---|
-| `Booter → Quirks → ResizeAppleGpuBars` | `0` | **`-1`** — macOS sees the full BAR |
-| `UEFI → Quirks → ResizeGpuBars` | `-1` | **`13`** — 8 GB BAR, full memory bandwidth |
-| `Kernel → Block` | *absent* | **adds `com.apple.iokit.IONDRVSupport` (`Strategy: Exclude`)** — otherwise the firmware framebuffer takes display index 0 from NVRMFB |
-| `Misc → Security → SecureBootModel` | *unchanged* | **`Disabled`** unless SIP is fully on — Apple Secure Boot refuses kexts Apple did not sign |
-| `Booter → Quirks → AllowRelocationBlock` | *unchanged* | **`true`**, only where `ProvideCustomSlide` and `AvoidRuntimeDefrag` are already on — the bigger BAR moves memory around and `boot.efi` otherwise stops at `STOP 0x16` |
-| `NVRAM → Delete` | *unchanged* | adds `boot-args` and `csr-active-config`, so OpenCore rewrites them every boot |
-| `Misc → Tools` | **empty** — no entries, no `Tools/` | adds `NullMothSafe.efi` and the boot-picker entry — the way back if the driver ever stops macOS starting |
+| `Booter → Quirks → ResizeAppleGpuBars` | `0` | unchanged from stock |
+| `UEFI → Quirks → ResizeGpuBars` | `-1` | unchanged from stock |
+| `Booter → Quirks → AllowRelocationBlock` | `true` | also `ProvideCustomSlide`/`AvoidRuntimeDefrag` are `true` |
+| `Kernel → Block` | *empty* | **no** `IONDRVSupport` block |
+| `Misc → Security → SecureBootModel` | `Disabled` | required — Apple Secure Boot refuses ad-hoc-signed kexts |
+| `NVRAM → Delete` | includes `boot-args`, `csr-active-config` | so OpenCore rewrites them every boot |
+| `Misc → Tools` | **empty** | see `64c7d6f`; the installer adds `NullMothSafe.efi` |
+| `NVRAM → boot-args` | `… amfi=0x80 nvfb=1 nvaccel=1` | **this is what enables the driver** |
 
-So the sequence is: **boot this EFI → install macOS → run the driver installer → reboot.** The
-installer does the rest. It prints every change it makes (`CHANGE …`) and keeps a timestamped
-backup, and `nullmoth-setup.sh` is re-runnable — if OpenCore already has every setting it needs
-it reports `OpenCore already has every setting the driver needs` and changes nothing.
+So the practical sequence is: **boot this EFI → install macOS → run the driver installer → reboot.**
+The installer adds its own tool entry and tool binary; those are deliberately not shipped
+pre-install. It prints every change it makes (`CHANGE …`) and is re-runnable — if OpenCore already
+has every setting it needs it reports
+`OpenCore already has every setting the driver needs` and changes nothing.
 
 One caveat from the installer's own notes: if SIP is still fully enabled in the running system,
 it defers the SIP/Secure-Boot/boot-args changes and only applies the `UEFI`/`Booter`/`Kernel.Block`
@@ -212,8 +281,9 @@ EFI/
   BOOT/BOOTX64.EFI          OpenCore's own launcher (self-contained; see note below)
   OC/
     OpenCore.efi
-    config.plist            ← pre-install (ScanPolicy 0, ResizeAppleGpuBars 0,
-                              no IONDRVSupport block, Misc → Tools empty)
+    config.plist            ← the default: NVIDIA flags present (nvfb/nvaccel)
+    config.plist.pre-nvidia ← same, with those two flags removed
+    config.plist.postinstall← same as config.plist, debug hygiene tidied
     ACPI/   26 tables on disk; 14 enabled. The enabled set is DSDT.aml (repaired),
             APIC.aml (permuted), SSDT-TPDHID.aml (the trackpad device), SSDT-PLUG-ALT
             and 10 others. The rest are disabled diagnostic probes — harmless, and
