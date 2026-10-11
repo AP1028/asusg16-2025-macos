@@ -102,6 +102,17 @@ internal disk on its own, it can go back on — but there is no benefit here.
 
 - **CFG Lock / VT-d** — if your unit exposes them, turn CFG Lock off and VT-d off (or keep
   `DisableIoMapper = true`, which this config sets). Not all ASUS laptop BIOS revisions show them.
+- **`ScanPolicy = 0` — the picker lists every bootable volume.** Zero means no file-system filter
+  and no device-type filter: APFS, HFS+, ESP, NTFS and Linux volumes on SATA, NVMe, USB, SD and PCI
+  devices are all scanned. This matters because a macOS installer — including an Apple
+  `createinstallmedia` stick — is **HFS+ on a USB device**, so any policy that does not allow both
+  hides exactly the volume you are trying to boot. Raise this value later only if you want to hide
+  other operating systems; OpenCore's own failsafe is `0x10F0103` (APFS on SATA/SAS/SCSI/NVMe,
+  which excludes USB and HFS).
+- **`Misc → Tools` ships empty, on purpose.** The `1401: Remove NVIDIA driver` picker entry and
+  `NullMothSafe.efi` belong to the post-install state; the driver installer adds both. Before the
+  driver is installed there is nothing to remove, and the entry is a dead end that also delays
+  finding the real problem.
 - **Do not let tooling "help" with the BAR quirks.** The installer sets `ResizeGpuBars = 13` and
   `ResizeAppleGpuBars = -1` after the driver is in. Since this BIOS has no ReBAR toggle to fight
   with, those settings are the whole story.
@@ -186,7 +197,7 @@ The helper makes these changes, and backs up your config to
 | `Misc → Security → SecureBootModel` | *unchanged* | **`Disabled`** unless SIP is fully on — Apple Secure Boot refuses kexts Apple did not sign |
 | `Booter → Quirks → AllowRelocationBlock` | *unchanged* | **`true`**, only where `ProvideCustomSlide` and `AvoidRuntimeDefrag` are already on — the bigger BAR moves memory around and `boot.efi` otherwise stops at `STOP 0x16` |
 | `NVRAM → Delete` | *unchanged* | adds `boot-args` and `csr-active-config`, so OpenCore rewrites them every boot |
-| `Misc → Tools` | *unchanged* | adds the boot-picker entry — the way back if the driver ever stops macOS starting |
+| `Misc → Tools` | **empty** — no entries, no `Tools/` | adds `NullMothSafe.efi` and the boot-picker entry — the way back if the driver ever stops macOS starting |
 
 So the sequence is: **boot this EFI → install macOS → run the driver installer → reboot.** The
 installer does the rest. It prints every change it makes (`CHANGE …`) and keeps a timestamped
@@ -252,11 +263,12 @@ EFI/
   BOOT/BOOTX64.EFI
   OC/
     OpenCore.efi
-    config.plist            ← pre-install (ResizeAppleGpuBars 0, no IONDRVSupport block)
+    config.plist            ← pre-install (ScanPolicy 0, ResizeAppleGpuBars 0,
+                              no IONDRVSupport block, Misc → Tools empty)
     ACPI/   DSDT.aml (repaired) · APIC.aml (permuted) · SSDT-PLUG-ALT + 9 more
     Drivers/ HfsPlus.efi · OpenRuntime.efi · ResetNvramEntry.efi
     Kexts/   22 kexts
-    Tools/   NullMothSafe.efi
+    (no Tools/ — the NullMoth picker entry and NullMothSafe.efi arrive with the installer)
 arrow-lake/
   DSDT-fixed.patch.txt   exact byte-level DSDT repair (6 substitutions) + verification
 ```

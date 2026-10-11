@@ -1100,7 +1100,7 @@
 			<data>
 			</data>
 			<key>ScanPolicy</key>
-			<integer>524547</integer>
+			<integer>0</integer>
 			<key>SecureBootModel</key>
 			<string>Disabled</string>
 			<key>Vault</key>
@@ -1114,30 +1114,11 @@
 			<false/>
 		</dict>
 		<key>Tools</key>
-		<array>
-			<dict>
-				<key>Arguments</key>
-				<string></string>
-				<key>Auxiliary</key>
-				<false/>
-				<key>Comment</key>
-				<string>NullMoth: remove the NVIDIA driver at the next start</string>
-				<key>Enabled</key>
-				<true/>
-				<key>Flavour</key>
-				<string>Auto</string>
-				<key>FullNvramAccess</key>
-				<true/>
-				<key>Name</key>
-				<string>1401: Remove NVIDIA driver</string>
-				<key>Path</key>
-				<string>NullMothSafe.efi</string>
-				<key>RealPath</key>
-				<false/>
-				<key>TextMode</key>
-				<false/>
-			</dict>
-		</array>
+		<!-- Intentionally empty. NullMothSafe.efi and its picker entry belong to the
+		     post-install state: nullmoth-setup.sh adds both once the driver is in.
+		     Shipping them pre-install puts a driver-removal entry in the picker on a
+		     machine that has no driver installed. -->
+		<array/>
 	</dict>
 	<key>NVRAM</key>
 	<dict>

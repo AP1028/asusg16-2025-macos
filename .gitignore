@@ -1,0 +1,8 @@
+# macOS AppleDouble sidecars and Finder metadata — never part of an ESP.
+# A stray ._Foo.efi in the ESP is the same class of host artifact as the
+# systemd-boot BOOTX64.EFI that broke issue #1.
+._*
+.DS_Store
+.Spotlight-V100
+.Trashes
+.fseventsd
