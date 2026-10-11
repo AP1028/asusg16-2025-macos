@@ -209,7 +209,9 @@ The helper backs your config up to `config.plist.nullmoth-<timestamp>` first, th
 > `Kernel → Block` entry — i.e. *none* of those quirks. Treat the table as installer documentation
 > for a different driver version, **not** as post-install state.
 
-What is **measured** in the shipped config, and therefore what the driver actually runs with here:
+What is **measured** in the shipped config, and therefore what the driver actually runs with here
+(see [`support-files/gpu-settings/README.md`](support-files/gpu-settings/README.md) for the full
+comparison):
 
 | Setting | Value in this repo | note |
 |---|---|---|
@@ -292,8 +294,9 @@ EFI/
     Kexts/  21 kexts, + 4 plugins inside VoodooI2C.kext
     (no Tools/ — the NullMoth picker entry and NullMothSafe.efi arrive with the installer)
 support-files/
-  arrow-lake/   the Arrow Lake technical write-up + byte-level DSDT repair
-  trackpad/     the trackpad fix: patches, SSDT, build instructions, technical explanation
+  arrow-lake/    the Arrow Lake technical write-up + byte-level DSDT repair
+  gpu-settings/  what the machine actually runs vs what the installer docs claim
+  trackpad/      the trackpad fix: patches, SSDT, build instructions, technical explanation
 ```
 
 > **`BOOT/BOOTX64.EFI` must be OpenCore's launcher** (`d0163dfbe5d2ea46`, 24,576 B) — it is
