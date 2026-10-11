@@ -119,66 +119,21 @@ internal disk on its own, it can go back on — but there is no benefit here.
 
 ## What makes Arrow Lake work
 
-Three things, all required, all already in this config.
+Three things, all required, all already in this config:
 
-### 1. Repaired `DSDT.aml`
+1. **Repaired `DSDT.aml`** — macOS embeds ACPICA 20160930, whose two-pass namespace load rejects
+   six top-level `Scope()` forward references in the stock table. The repair wraps them; it cannot
+   be an `ACPI → Patch` because the growth is +20 bytes and OpenCore's patch is in-place only.
+   Result on hardware: **14 table load failures → 4**.
+2. **`ProvideCurrentCpuInfo = true` + permuted `APIC.aml`** — XNU's `x86_validate_topology()`
+   panics when CPUID and MADT disagree. Arrow Lake-H has three core types (P, E, LP-E) and two
+   Atom native model IDs. The MADT is replaced so the six P-cores hold UIDs 0–5.
+3. **`SSDT-PLUG-ALT`, not `SSDT-PLUG`** — Arrow Lake declares CPUs as `Device` objects
+   (`_HID "ACPI0007"`), not `Processor`, so plain `SSDT-PLUG` silently does nothing and XCPM never
+   attaches. `CpuTopologyRebuild.kext` is present but disabled; it is what panics.
 
-macOS embeds **ACPICA 20160930**, which does a *two-pass* namespace load: pass 1 skips every
-`If`/`Else`/`While` body, yet still requires every top-level `Scope()` target to exist. On
-`AE_NOT_FOUND` it deletes everything the table created and the whole load fails. Modern ACPICA
-executes the table as a single term list, which is why Linux and Windows load the same table.
-
-This DSDT has **six** such `Scope()` statements. The repair wraps them so pass 1 skips them and
-module-level execution creates the targets:
-
-- `Scope(_SB.PC00.XHCI.RHUB.HS07)` → `If (Zero) { … }` — length-preserving, *could* be an `ACPI → Patch`
-- the five forward references (`HDAS` ×2, `SPI0` ×3) → `If (One) { Scope(X) { … } }` — **+4 bytes each**
-
-**It cannot be an `ACPI → Patch`.** The five growths total **+20 bytes** (430740 → 430760), and
-OpenCore's patch is strictly in-place — `OcAcpiPatchTables()` drops any entry where
-`Find.Size != Replace.Size`. Ship the finished table via `ACPI → Add`; it keeps the original
-signature and OEM IDs so it replaces the firmware table, and OpenCore recomputes the checksum.
-
-Verified with `acpiexec` built from ACPICA `R09_30_16` (= 20160930, the version macOS embeds):
-original → `[DSDT] table load failed`; repaired → loads clean, namespace identical (5955 objects
-/ 190 devices / 118 regions / 978 methods). On hardware: **14 table load failures → 4**.
-
-Exact byte-level repair (all six substitutions, offsets and the checksum procedure):
-[`arrow-lake/DSDT-fixed.patch.txt`](arrow-lake/DSDT-fixed.patch.txt).
-
-> This removes a genuine defect but was **not** the step that got the boot to userland. Ship it
-> because the table is malformed for macOS's parser.
-
-### 2. `ProvideCurrentCpuInfo` + permuted `APIC.aml`
-
-XNU's `x86_validate_topology()` panics when the CPUID-derived thread count disagrees with the
-MADT count. Arrow Lake-H has **three core types** (P, E, LP-E) and **two Atom native model IDs**
-(`0x2` Crestmont, `0x3` Skymont).
-
-`ProvideCurrentCpuInfo = true` — despite its documentation saying *"e.g. Intel Alder Lake"*, the
-implementation selects by arithmetic (`IsAmpCpu = ThreadCount % CoreCount != 0`) plus an
-`_x86_validate_topology` → `ret` patch, so it engages on any hybrid P+E part.
-
-The firmware MADT is replaced so the six P-cores hold UIDs 0–5. The LAPIC set is unchanged; only
-the UID assignment moves:
-
-```
-OEM:      uid 2,3,4,5 → LAPIC 16,18,20,22
-patched:  uid 2,3,4,5 → LAPIC 32,40,48,56
-          (LAPIC 0,8 → 0,1    LAPIC 64,66 → 14,15)
-```
-
-Confirmed on hardware: `AppleACPICPU: ProcessorId=2 LocalApicId=32 Enabled`.
-
-### 3. `SSDT-PLUG-ALT`, and `CpuTopologyRebuild` disabled
-
-`SSDT-PLUG` injects `plugin-type=1` only where `ObjectType == 0x0C` (a `Processor`). Arrow Lake
-declares CPUs as **`Device`** objects (`_HID "ACPI0007"`), so plain `SSDT-PLUG` **silently does
-nothing** and XCPM never attaches. `SSDT-PLUG-ALT` creates `Processor (CP00…CP63)` under `\_SB`
-with a Darwin-gated `_STA`.
-
-`CpuTopologyRebuild.kext` is present but **disabled** — its author states it cannot handle the
-mobile P + E + LP-E layout, and it is what panics. No `ctrsmt=` boot argument.
+Full technical detail, verification and the byte-level repair:
+[`support-files/arrow-lake/README.md`](support-files/arrow-lake/README.md).
 
 ## After macOS is installed: run the driver installer — it flips the EFI for you
 
@@ -223,29 +178,23 @@ is the thing that calls the helper.
 | ✅ | **USB-A** | **Working** | |
 | ✅ | **USB-C** | **Working** | Data **and DP alt mode** |
 | 🚧 | **Keyboard function keys** | **Partial** | Consumer-page HID reports work; the vendor page `0xFF31` reports (brightness, touchpad toggle) are discarded by macOS. Workable with `BrightnessKeys.kext` + a Karabiner rule on Ctrl+F1/F2 |
-| 🚧 | **Trackpad** | **WIP** | `VoodooI2C`/`VoodooI2CHID` load and drive the I2C controller, but **all 24 touchpad ACPI devices (`TPD0`/`TPL1`) are never created** — see below |
+| ✅ | **Trackpad** | **Working** | Multitouch, gestures, tap-to-click. Requires patched `VoodooI2C`/`VoodooI2CHID`/`VoodooGPIO`, the authored `SSDT-TPDHID.aml`, and `VoodooInput.kext` **enabled** — see [`support-files/trackpad/`](support-files/trackpad/) |
 | 🔧 | **Bluetooth** | **Needs upstream** | Intel `8087:0037` ("BlazarU") is absent from `IntelBluetoothFirmware`. It is a standard USB device and the framework already drives 12 other Intel chips — **path: add the device ID + a firmware blob from `linux-firmware`** |
 | ❌ | **Wi-Fi** | **Not possible** | Intel `8086:7740` CNVi; appears nowhere in itlwm. No driver exists. Use a USB Ethernet adapter |
 | ❌ | **Audio (internal)** | **Not possible** | Realtek **ALC1308 on SoundWire**, not legacy HDA — macOS `AppleHDA` has no SoundWire transport. AppleALC loads correctly and has no codec to patch. **Use USB audio, which works natively.** NVIDIA HDMI/DP audio over the dGPU is not working |
 
-### Trackpad (WIP)
+### Trackpad
 
-Not a kext problem — the ACPI devices are missing. All 24 `TPD0`/`TPL1` devices across six I2C
-controllers are gated by:
+**Working.** The firmware's own 24 touchpad devices (`TPD0`/`TPL1`) are never created by macOS —
+they sit inside a root-level `If ((PCHA == Zero))` spanning 3,638 DSDT lines that macOS's ACPICA
+never executes — so an equivalent device is **synthesised** by `SSDT-TPDHID.aml` under
+`\_SB.PC00`, and patched `VoodooI2C` locates it and creates the nub.
 
-```asl
-If (((TPDT != Zero) && (I2CN & One)))
-    Return (0x0F)
-Return (Zero)
-```
+The two changes that actually made it work were the **`XDSM` method** in that SSDT and
+**enabling `VoodooInput.kext`**.
 
-where `I2CN = SDS0` (an EC value) is set in `_INI` and reads zero on macOS. The 24 `_STA`
-fallbacks were already patched `Return (Zero)` → `Return (Ones)` (AML `A4 00` → `A4 FF`, same
-length, verified surgical, table still loads with an identical namespace) — **devices still
-absent**.
-
-Next step: the whole block sits inside `If ((PCHA == Zero))` and **`PCHA` is referenced 22× but
-declared nowhere**, likely in an ASUS SSDT. Try an SSDT defining `PCHA`, or patch the outer `If`.
+Patches, build instructions, the SSDT source and the full technical explanation:
+[`support-files/trackpad/README.md`](support-files/trackpad/README.md).
 
 ## Known issues in this config
 
@@ -260,18 +209,28 @@ declared nowhere**, likely in an ASUS SSDT. Try an SSDT defining `PCHA`, or patc
 
 ```
 EFI/
-  BOOT/BOOTX64.EFI
+  BOOT/BOOTX64.EFI          OpenCore's own launcher (self-contained; see note below)
   OC/
     OpenCore.efi
     config.plist            ← pre-install (ScanPolicy 0, ResizeAppleGpuBars 0,
                               no IONDRVSupport block, Misc → Tools empty)
-    ACPI/   DSDT.aml (repaired) · APIC.aml (permuted) · SSDT-PLUG-ALT + 9 more
+    ACPI/   26 tables on disk; 14 enabled. The enabled set is DSDT.aml (repaired),
+            APIC.aml (permuted), SSDT-TPDHID.aml (the trackpad device), SSDT-PLUG-ALT
+            and 10 others. The rest are disabled diagnostic probes — harmless, and
+            left in place so the working set is reproducible.
     Drivers/ HfsPlus.efi · OpenRuntime.efi · ResetNvramEntry.efi
-    Kexts/   22 kexts
+    Kexts/  21 kexts, + 4 plugins inside VoodooI2C.kext
     (no Tools/ — the NullMoth picker entry and NullMothSafe.efi arrive with the installer)
-arrow-lake/
-  DSDT-fixed.patch.txt   exact byte-level DSDT repair (6 substitutions) + verification
+support-files/
+  arrow-lake/   the Arrow Lake technical write-up + byte-level DSDT repair
+  trackpad/     the trackpad fix: patches, SSDT, build instructions, technical explanation
 ```
+
+> **`BOOT/BOOTX64.EFI` must be OpenCore's launcher** (`d0163dfbe5d2ea46`, 24,576 B) — it is
+> self-contained and loads `OC/OpenCore.efi` from the same volume. Do **not** put a
+> **systemd-boot** binary there: systemd-boot 261.3 (`5350e2e8bcbe9e73`) reads
+> `\loader\entries\*.conf`, which only exist on a systemd-boot ESP, and fails everywhere else
+> with *"No loader found."* This exact mix-up is called out in `.gitignore`.
 
 ## Credits
 

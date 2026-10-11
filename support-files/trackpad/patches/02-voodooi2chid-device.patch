@@ -1,0 +1,87 @@
+diff --git a/VoodooI2CHID/VoodooI2CHIDDevice.cpp b/b/VoodooI2CHID/VoodooI2CHIDDevice.cpp
+index 9a4edbb..840431f 100644
+--- a/VoodooI2CHID/VoodooI2CHIDDevice.cpp
++++ b/VoodooI2CHID/VoodooI2CHIDDevice.cpp
+@@ -120,11 +120,10 @@ IOReturn VoodooI2CHIDDevice::getHIDDescriptorAddress() {
+ }
+ 
+ void VoodooI2CHIDDevice::getInputReport() {
+-    IOBufferMemoryDescriptor* buffer;
+-    IOReturn ret;
++    IOBufferMemoryDescriptor* buffer = NULL;
+     unsigned char* report = (unsigned char *)IOMalloc(hid_descriptor.wMaxInputLength);
+ 
+-    api->readI2C(report, hid_descriptor.wMaxInputLength);
++    IOReturn ret = api->readI2C(report, hid_descriptor.wMaxInputLength);
+ 
+     int return_size = report[0] | report[1] << 8;
+ 
+@@ -142,15 +141,24 @@ void VoodooI2CHIDDevice::getInputReport() {
+         goto exit;
+     }
+ 
+-    buffer = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, 0, return_size);
+-    buffer->writeBytes(0, report + 2, return_size - 2);
+-
+-    ret = handleReport(buffer, kIOHIDReportTypeInput);
+-
+-    if (ret != kIOReturnSuccess)
+-        IOLog("%s::%s Error handling input report: 0x%.8x\n", getName(), name, ret);
++    /*
++     * REPORT LENGTH FIX. The I2C-HID frame is [2-byte length][payload],
++     * so the payload is (return_size - 2) bytes. This allocated a descriptor of
++     * return_size but filled only return_size - 2, handing macOS a report 2 bytes
++     * LONGER than the device sent, with two uninitialised trailing bytes that the HID
++     * parser then reads as report data. Linux passes exactly the payload length:
++     *     hid_safe_input_report(hid, 0, inbuf + 2, length - 2, 1)
++     */
++    buffer = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, 0,
++                                                         (return_size >= 2) ? (UInt32)(return_size - 2) : 0);
++    if (buffer) {
++        buffer->writeBytes(0, report + 2, (return_size >= 2) ? (UInt16)(return_size - 2) : 0);
++        ret = handleReport(buffer, kIOHIDReportTypeInput);
++        if (ret != kIOReturnSuccess)
++            IOLog("%s::%s Error handling input report: 0x%.8x\n", getName(), name, ret);
++        OSSafeReleaseNULL(buffer);
++    }
+ 
+-    OSSafeReleaseNULL(buffer);
+ exit:
+     IOFree(report, hid_descriptor.wMaxInputLength);
+     return;
+@@ -289,7 +297,7 @@ IOReturn VoodooI2CHIDDevice::resetHIDDeviceGated() {
+ 
+     VoodooI2CHIDDeviceCommand command;
+     command.c.reg = hid_descriptor.wCommandRegister;
+-    command.c.opcode = 0x01;
++    command.c.opcode = 0x01;                /* I2C_HID_OPCODE_RESET -> byte 2 */
+     command.c.report_type_id = 0;
+ 
+     api->writeI2C(command.data, 4);
+@@ -311,6 +319,7 @@ IOReturn VoodooI2CHIDDevice::resetHIDDeviceGated() {
+         } else if (sleep == THREAD_AWAKENED) {
+             IOLog("%s::%s Device initiated reset accomplished\n", getName(), name);
+         }
++
+     }
+ 
+     return kIOReturnSuccess;
+@@ -322,7 +331,7 @@ IOReturn VoodooI2CHIDDevice::setHIDPowerState(VoodooI2CState state) {
+     int attempts = 5;
+     do {
+         command.c.reg = hid_descriptor.wCommandRegister;
+-        command.c.opcode = 0x08;
++        command.c.opcode = 0x08;            /* I2C_HID_OPCODE_SET_POWER -> byte 2 */
+         command.c.report_type_id = state ? I2C_HID_PWR_ON : I2C_HID_PWR_SLEEP;
+ 
+         ret = api->writeI2C(command.data, 4);
+@@ -484,7 +493,8 @@ bool VoodooI2CHIDDevice::handleStart(IOService* provider) {
+     startInterrupt();
+ 
+     lookupQuirks();
+-    resetHIDDevice();
++
++        resetHIDDevice();
+ 
+ 
+     PMinit();

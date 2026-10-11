@@ -1,0 +1,12 @@
+diff --git a/VoodooGPIO/VoodooGPIOIntel.hpp b/b/VoodooGPIO/VoodooGPIOIntel.hpp
+index d1fa751..67d87ab 100644
+--- a/VoodooGPIO/VoodooGPIOIntel.hpp
++++ b/VoodooGPIO/VoodooGPIOIntel.hpp
+@@ -96,6 +96,7 @@ struct intel_community {
+     unsigned padcfglock_offset;
+     unsigned hostown_offset;
+     unsigned ie_offset;
++    unsigned is_offset;   /* GPI_IS offset; was hardcoded to Ice Lake 0x100 */
+     unsigned pin_base;
+     unsigned gpp_size;
+     unsigned gpp_num_padown_regs;

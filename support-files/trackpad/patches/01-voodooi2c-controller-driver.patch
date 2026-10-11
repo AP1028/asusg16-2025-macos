@@ -1,0 +1,114 @@
+diff --git a/VoodooI2C/VoodooI2C/VoodooI2CController/VoodooI2CControllerDriver.cpp b/b/VoodooI2C/VoodooI2C/VoodooI2CController/VoodooI2CControllerDriver.cpp
+index 3c224e1..39b0d64 100644
+--- a/VoodooI2C/VoodooI2C/VoodooI2CController/VoodooI2CControllerDriver.cpp
++++ b/VoodooI2C/VoodooI2C/VoodooI2CController/VoodooI2CControllerDriver.cpp
+@@ -1,3 +1,4 @@
++#include <string.h>
+ //
+ //  VoodooI2CControllerDriver.cpp
+ //  VoodooI2C
+@@ -396,6 +397,27 @@ VoodooI2CControllerDriver* VoodooI2CControllerDriver::probe(IOService* provider,
+     return this;
+ }
+ 
++// One-shot guard for the DSH device-lookup fallback.
++static bool dsh_tried = false;
++
++// Recursively locate an ACPI device by name. fromPath() proved unreliable from this
++// context, and the ACPI plane's top level only holds C000..C0xx, _SB and THRM, so a
++// non-recursive scan never reaches _SB/PC00/ZTPD.
++static IORegistryEntry *DshFindAcpi(const char *want, IORegistryEntry *node, int depth)
++{
++    if (!node || depth > 6) return nullptr;
++    OSIterator *it = node->getChildIterator(gIOACPIPlane);
++    if (!it) return nullptr;
++    IORegistryEntry *o, *found = nullptr;
++    while (!found && (o = OSDynamicCast(IORegistryEntry, it->getNextObject()))) {
++        const char *nm = o->getName();
++        if (nm && strncmp(nm, want, 4) == 0) { found = o; break; }
++        found = DshFindAcpi(want, o, depth + 1);
++    }
++    it->release();
++    return found;
++}
++
+ IOReturn VoodooI2CControllerDriver::publishNubs() {
+     IOLog("%s::%s Publishing device nubs\n", getName(), bus_device.name);
+ 
+@@ -427,6 +449,60 @@ IOReturn VoodooI2CControllerDriver::publishNubs() {
+     }
+     children->release();
+ 
++    // ---- DSH fallback: locate the touchpad device outside the I2C scope ----
++    // macOS does not create injected ACPI devices beneath an I2C controller node
++    // (_SB.PC00.I2C3 has no children, and six controlled attempts to add one all
++    // failed), whereas the identical device publishes fine under _SB.PC00.
++    // Without this, no VoodooI2CDeviceNub is ever created for this machine.
++    if (device_nubs->getCount() == 0 && dsh_tried == false) {
++        dsh_tried = true;
++        // Search the ACPI plane recursively: fromPath() proved unreliable from this
++        // context, and a non-recursive scan only sees C000..C0xx/_SB/THRM at the top.
++        IORegistryEntry *root = IORegistryEntry::getRegistryRoot();
++        IORegistryEntry *acpi = root ? root->getChildEntry(gIOACPIPlane) : nullptr;
++        IORegistryEntry *dev = DshFindAcpi("ZTPD", acpi, 0);
++
++        if (dev) {
++            IOLog("%s::%s DSH: located ZTPD, creating nub\n", getName(), bus_device.name);
++            VoodooI2CDeviceNub *device_nub = OSTypeAlloc(VoodooI2CDeviceNub);
++            OSDictionary *child_properties = dev->dictionaryWithProperties();
++
++            // The HID personality matches on  IOPropertyMatch = { compatible = PNP0C50 }.
++            // In the normal path that property arrives because the child is a real
++            // ACPI-plane device and Apple's ACPI layer publishes _HID/_CID as
++            // "compatible". Our synthesised ZTPD does not carry it, so the HID
++            // personality has never been matchable on this machine -- which is
++            // exactly why DshHIDDevice instances have always been 0 with no
++            // diagnostics at all (never a failed start; simply never considered).
++            //
++            // Publish diagnostics first so we can SEE what the device actually
++            // offers rather than assume, then set compatible defensively.
++            if (device_nub) {
++                OSObject *compat = dev ? dev->copyProperty("compatible") : NULL;
++                if (compat) {
++                    device_nub->setProperty("compatible", compat);
++                    compat->release();
++                } else {
++                    device_nub->setProperty("compatible", "PNP0C50");
++                }
++            }
++
++            if (!device_nub ||
++                !device_nub->init(child_properties) ||
++                !device_nub->attach(this, OSDynamicCast(IOService, dev))) {
++                IOLog("%s::%s DSH: could not initialise nub\n", getName(), bus_device.name);
++            } else if (!device_nub->start(this)) {
++                device_nub->detach(this);
++                IOLog("%s::%s DSH: could not start nub\n", getName(), bus_device.name);
++            } else {
++                device_nubs->setObject(device_nub);
++                IOLog("%s::%s DSH: touchpad nub published\n", getName(), bus_device.name);
++            }
++            OSSafeReleaseNULL(child_properties);
++            OSSafeReleaseNULL(device_nub);
++        }
++    }
++
+     return kIOReturnSuccess;
+ }
+ 
+@@ -592,6 +668,7 @@ IOReturn VoodooI2CControllerDriver::setPowerState(unsigned long whichState, IOSe
+     return kIOPMAckImplied;
+ }
+ 
++
+ bool VoodooI2CControllerDriver::start(IOService* provider) {
+     if (!super::start(provider))
+         return false;
+@@ -650,7 +727,6 @@ bool VoodooI2CControllerDriver::start(IOService* provider) {
+     if (startI2CInterrupt() != kIOReturnSuccess) {
+         goto exit;
+     }
+-
+     setProperty("VoodooI2CServices Supported", kOSBooleanTrue);
+ 
+     registerService();
