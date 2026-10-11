@@ -135,6 +135,24 @@ Three things, all required, all already in this config:
 Full technical detail, verification and the byte-level repair:
 [`support-files/arrow-lake/README.md`](support-files/arrow-lake/README.md).
 
+## This repo ships the PRE-INSTALL EFI only
+
+`EFI/` is the pre-install OpenCore tree: what you boot to install macOS. Its SMBIOS is **masked
+placeholders** on purpose — the NullMoth installer will not touch a config until the running
+machine's identity matches it, so you must fill in your own before the driver install.
+
+**A snapshot of a finished, working install is deliberately NOT in this repo.** It would carry a
+real, valid SMBIOS — serial, MLB and UUID — and publishing that lets anyone clone the identity.
+The post-install state is documented instead:
+
+| what | where |
+|---|---|
+| how to generate a valid identity | [`support-files/smbios/`](support-files/smbios/README.md) |
+| what the installer changes, and what a running machine ends up with | [`support-files/gpu-settings/`](support-files/gpu-settings/README.md) |
+
+> ⚠️ **If you fork this repo, keep your own SMBIOS out of it.** A committed serial is public
+> forever, including in the git history after you delete the file.
+
 ## Config variants: pre-NVIDIA vs post-install
 
 `EFI/OC/` ships **three** configs. Only `config.plist` is read at boot; the other two are
@@ -154,6 +172,22 @@ at all. Those kexts are **not** in `OC/Kexts` — nothing in this repo loads the
 
 `config.plist` and `config.plist.postinstall` are **functionally identical**; they differ only in
 debug hygiene (`AppleDebug` and one disabled `Misc.Entries` entry), which `postinstall` drops.
+
+### What a running machine has that the stock tree does not
+
+The installer rewrites the config, so a finished machine differs from `EFI/config.plist` like this:
+
+```
+boot-args        … amfi=0x80 nvfb=1 nvaccel=1 nvfbheads=4 -nvkmsnosmooth ipc_control_port_options=0
+ResizeGpuBars    13          (stock: -1)
+ResizeAppleGpuBars -1        (stock: 0)
+Kernel → Block   1 entry     (com.apple.iokit.IONDRVSupport, Exclude)
+Misc → Tools     1 entry     (NullMothSafe.efi — the recovery path)
+ScanPolicy       524547      (stock: 0)
+```
+
+Note `ScanPolicy 524547` is **correct for a fixed disk** — it lists only APFS-on-NVMe. It is the
+stock tree that must keep `0`, because an installer stick is HFS+ on USB.
 
 ### What is identical in all three
 
@@ -296,6 +330,7 @@ EFI/
 support-files/
   arrow-lake/    the Arrow Lake technical write-up + byte-level DSDT repair
   gpu-settings/  what the machine actually runs vs what the installer docs claim
+  smbios/        generating a valid identity with macserial
   trackpad/      the trackpad fix: patches, SSDT, build instructions, technical explanation
 ```
 
