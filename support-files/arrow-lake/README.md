@@ -96,3 +96,26 @@ mobile P + E + LP-E layout, and it is what panics. No `ctrsmt=` boot argument.
 |---|---|
 | `DSDT-fixed.patch.txt` | exact byte-level DSDT repair (6 substitutions) + verification |
 | `iasl-defects.txt` | the six malformed `Scope()` sites, as reported by `iasl` |
+
+---
+
+## References
+
+- macOS's ACPICA, `R09_30_16` — `psloop.c`, `nsparse.c`, `nsload.c`, `dswload.c`:
+  <https://github.com/acpica/acpica/releases/tag/R09_30_16>
+- OpenCore in-place patch constraint, `OcAcpiPatchTables()`:
+  <https://github.com/acidanthera/OpenCorePkg/blob/master/Library/OcMainLib/OpenCoreAcpi.c>
+- OpenCore `ProvideCurrentCpuInfo` (`IsAmpCpu`, topology patch):
+  <https://github.com/acidanthera/OpenCorePkg/blob/master/Library/OcAppleKernelLib/CpuidPatches.c>
+- XNU `x86_validate_topology()`:
+  <https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/i386/cpu_threads.c>
+- `SSDT-PLUG-ALT` (official, ships in the OpenCore zip):
+  <https://github.com/acidanthera/OpenCorePkg/blob/master/Docs/AcpiSamples/Source/SSDT-PLUG-ALT.dsl>
+- `SSDT-PLUG` (the `ObjectType == 0x0C` guard that fails):
+  <https://github.com/acidanthera/OpenCorePkg/blob/master/Docs/AcpiSamples/Source/SSDT-PLUG.dsl>
+- `CpuTopologyRebuild` #24 — hybrid topology on this class of CPU:
+  <https://github.com/b00t0x/CpuTopologyRebuild/issues/24>
+- `CpuTopologyRebuild` #29 — another 285H (Beelink GTi15 mini-PC) at macOS 15.7 with all
+  16 cores and no topology; `CpuTopologyRebuild` freezes it at `AppleACPICPU`, and a
+  permuted `APIC.aml` supplied in that thread did not resolve it:
+  <https://github.com/b00t0x/CpuTopologyRebuild/issues/29>
